@@ -1,0 +1,27 @@
+{
+  "name": "whatsapp-bulk-api",
+  "version": "1.0.0",
+  "description": "API REST para envío masivo de mensajes WhatsApp con Baileys",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.7.9",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "multer": "^2.0.0",
+    "pino": "^8.19.0",
+    "pino-pretty": "^11.0.0",
+    "qrcode": "^1.5.3",
+    "sequelize": "^6.37.3",
+    "socket.io": "^4.7.4",
+    "sqlite3": "^5.1.7",
+    "uuid": "^9.0.1"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
