@@ -208,21 +208,7 @@ GET http://localhost:3000/api/qr
 }
 ```
 
-**Cómo mostrar el QR en HTML:**
-```html
-<img id="qr" />
-<script>
-  fetch('http://localhost:3000/api/qr')
-    .then(r => r.json())
-    .then(data => {
-      document.getElementById('qr').src = data.datos.qr;
-    });
-</script>
-```
 
-**Importante:** El QR expira cada 20 segundos. Baileys genera uno nuevo automáticamente y lo emite por Socket.IO en el evento `qr_actualizado`.
-
----
 
 ### 4. POST /api/disconnect
 
