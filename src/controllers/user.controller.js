@@ -52,4 +52,23 @@ const listarUsuarios = async (req, res) => {
   }
 };
 
-module.exports = { crearUsuario, listarUsuarios };
+const eliminarUsuario = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const deletedCount = await userDb.eliminarPorId(id);
+    
+    if (deletedCount === 0) {
+      return res.status(404).json({ error: 'Usuario no encontrado.' });
+    }
+    
+    res.json({
+      exito: true,
+      mensaje: 'Usuario eliminado exitosamente.',
+    });
+  } catch (error) {
+    logger.error('Error al eliminar usuario:', error);
+    res.status(500).json({ error: 'Error interno al eliminar usuario.' });
+  }
+};
+
+module.exports = { crearUsuario, listarUsuarios, eliminarUsuario };

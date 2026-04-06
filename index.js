@@ -148,7 +148,8 @@ async function iniciar() {
     });
 
   } catch (error) {
-    logger.error('Error al iniciar el servidor:', error);
+    console.error(error);
+    logger.error({ err: error }, 'Error al iniciar el servidor:');
     process.exit(1);
   }
 }

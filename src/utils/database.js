@@ -119,7 +119,7 @@ Message.belongsTo(Campaign, { foreignKey: 'campaign_id' });
  * Inicializar la base de datos (crear tablas si no existen)
  */
 async function initDatabase() {
-  await sequelize.sync({ alter: true }); // enable alter to add the missing user_id fields
+  await sequelize.sync(); // alter: true daba problemas de SQLITE_BUSY
   logger.info('✅ Base de datos inicializada correctamente');
 }
 
@@ -129,6 +129,7 @@ const userDb = {
   obtenerPorId: (id) => User.findByPk(id, { raw: true }),
   obtenerPorApiKey: (api_key) => User.findOne({ where: { api_key }, raw: true }),
   listarTodos: () => User.findAll({ raw: true }),
+  eliminarPorId: (id) => User.destroy({ where: { id } }),
 };
 
 // ── Helpers para campañas ─────────────────────────────────────
