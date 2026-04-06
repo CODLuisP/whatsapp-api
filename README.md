@@ -43,34 +43,43 @@ npm start
 
 ### Estado y QR
 
-| Método | Ruta | Descripción |
-|--------|------|-------------|
-| GET | `/api/status` | Estado de conexión de WhatsApp |
-| GET | `/api/qr` | QR en base64 para escanear |
-| POST | `/api/disconnect` | Cerrar sesión |
+| Método | Ruta | URL Completa | Descripción |
+|--------|------|--------------|-------------|
+| GET | `/api/status` | `http://localhost:3000/api/status` | Estado de conexión de WhatsApp |
+| GET | `/api/qr` | `http://localhost:3000/api/qr` | QR en base64 para escanear |
+| POST | `/api/disconnect` | `http://localhost:3000/api/disconnect` | Cerrar sesión |
 
 ### Mensajes
 
-| Método | Ruta | Descripción |
-|--------|------|-------------|
-| POST | `/api/send/single` | Enviar mensaje individual |
-| POST | `/api/send/bulk` | Envío masivo con campaña |
-| POST | `/api/upload` | Subir archivo (imagen/doc) |
+| Método | Ruta | URL Completa | Descripción |
+|--------|------|--------------|-------------|
+| POST | `/api/send/single` | `http://localhost:3000/api/send/single` | Enviar mensaje individual |
+| POST | `/api/send/bulk` | `http://localhost:3000/api/send/bulk` | Envío masivo con campaña |
+| POST | `/api/upload` | `http://localhost:3000/api/upload` | Subir archivo (imagen/doc) |
 
 ### Campañas
 
-| Método | Ruta | Descripción |
-|--------|------|-------------|
-| GET | `/api/campaigns` | Listar todas las campañas |
-| GET | `/api/campaigns/:id` | Detalle y progreso |
-| POST | `/api/campaigns/:id/cancel` | Cancelar campaña activa |
-| DELETE | `/api/campaigns/:id` | Eliminar del historial |
+| Método | Ruta | URL Completa | Descripción |
+|--------|------|--------------|-------------|
+| GET | `/api/campaigns` | `http://localhost:3000/api/campaigns` | Listar todas las campañas |
+| GET | `/api/campaigns/:id` | `http://localhost:3000/api/campaigns/CAMPAIGN_ID` | Detalle y progreso |
+| POST | `/api/campaigns/:id/cancel` | `http://localhost:3000/api/campaigns/CAMPAIGN_ID/cancel` | Cancelar campaña activa |
+| DELETE | `/api/campaigns/:id` | `http://localhost:3000/api/campaigns/CAMPAIGN_ID` | Eliminar del historial |
 
 ---
 
 ## 📨 Ejemplos de uso
 
-### Enviar mensaje individual
+---
+
+### ✉️ POST `/api/send/single` — Enviar mensaje de texto
+
+**Paso 1** — Asegúrate de estar conectado (escanea el QR si no lo has hecho):
+```
+GET http://localhost:3000/api/qr
+```
+
+**Paso 2** — Haz la petición POST con el número y texto:
 ```bash
 curl -X POST http://localhost:3000/api/send/single \
   -H "Content-Type: application/json" \
@@ -80,7 +89,99 @@ curl -X POST http://localhost:3000/api/send/single \
   }'
 ```
 
-### Envío masivo con variables
+**Paso 3** — Verifica la respuesta exitosa:
+```json
+{
+  "exito": true,
+  "mensaje": "Mensaje enviado exitosamente",
+  "datos": {
+    "message_id": "uuid-del-mensaje",
+    "telefono": "51987654321",
+    "tipo": "texto",
+    "enviado_en": "2024-04-01T15:30:00.000Z"
+  }
+}
+```
+
+---
+
+### 🖼️ POST `/api/send/single` — Enviar imagen
+
+**Paso 1** — Sube la imagen al servidor:
+```bash
+curl -X POST http://localhost:3000/api/upload \
+  -F "file=@/ruta/a/tu/imagen.jpg"
+```
+
+**Paso 2** — Usa la URL obtenida para enviar la imagen:
+```bash
+curl -X POST http://localhost:3000/api/send/single \
+  -H "Content-Type: application/json" \
+  -d '{
+    "phone": "51987654321",
+    "type": "imagen",
+    "file_url": "http://localhost:3000/uploads/1711234567-imagen.jpg",
+    "text": "Mira esta imagen 👆"
+  }'
+```
+
+**Paso 3** — Verifica la respuesta exitosa:
+```json
+{
+  "exito": true,
+  "mensaje": "Mensaje enviado exitosamente",
+  "datos": {
+    "message_id": "uuid-del-mensaje",
+    "telefono": "51987654321",
+    "tipo": "imagen",
+    "enviado_en": "2024-04-01T15:30:00.000Z"
+  }
+}
+```
+
+---
+
+### 📄 POST `/api/send/single` — Enviar documento (PDF, Word, Excel)
+
+**Paso 1** — Sube el documento al servidor:
+```bash
+curl -X POST http://localhost:3000/api/upload \
+  -F "file=@/ruta/a/tu/factura.pdf"
+```
+
+**Paso 2** — Envía el documento con la URL obtenida:
+```bash
+curl -X POST http://localhost:3000/api/send/single \
+  -H "Content-Type: application/json" \
+  -d '{
+    "phone": "51987654321",
+    "type": "documento",
+    "file_url": "http://localhost:3000/uploads/1711234567-factura.pdf",
+    "filename": "Factura_F001-00234.pdf",
+    "mime_type": "application/pdf",
+    "text": "Adjuntamos tu factura del mes de abril"
+  }'
+```
+
+**Paso 3** — Verifica la respuesta exitosa:
+```json
+{
+  "exito": true,
+  "mensaje": "Mensaje enviado exitosamente",
+  "datos": {
+    "message_id": "uuid-del-mensaje",
+    "telefono": "51987654321",
+    "tipo": "documento",
+    "enviado_en": "2024-04-01T15:30:00.000Z"
+  }
+}
+```
+
+---
+
+### 📣 POST `/api/send/bulk` — Envío masivo con variables
+
+**Paso 1** — Crea la campaña con la lista de destinatarios:
 ```bash
 curl -X POST http://localhost:3000/api/send/bulk \
   -H "Content-Type: application/json" \
@@ -94,22 +195,69 @@ curl -X POST http://localhost:3000/api/send/bulk \
   }'
 ```
 
-### Enviar imagen
-```bash
-curl -X POST http://localhost:3000/api/send/single \
-  -H "Content-Type: application/json" \
-  -d '{
-    "phone": "51987654321",
-    "text": "Mira esta imagen 👆",
-    "type": "imagen",
-    "file_url": "https://ejemplo.com/imagen.jpg"
-  }'
+**Paso 2** — Guarda el `campaign_id` de la respuesta:
+```json
+{
+  "exito": true,
+  "mensaje": "Campaña creada y en cola de procesamiento",
+  "datos": {
+    "campaign_id": "f3c0571f-a146-49a9-a9f0-67868c1bc044",
+    "nombre": "Promo Abril",
+    "total_mensajes": 2,
+    "estado": "pendiente"
+  }
+}
 ```
 
-### Ver progreso de campaña
+**Paso 3** — Consulta el progreso con ese ID:
 ```bash
-curl http://localhost:3000/api/campaigns/CAMPAIGN_ID
+curl http://localhost:3000/api/campaigns/f3c0571f-a146-49a9-a9f0-67868c1bc044
 ```
+
+---
+
+### ⛔ POST `/api/campaigns/:id/cancel` — Cancelar campaña activa
+
+**Paso 1** — Confirma que la campaña esté en proceso:
+```bash
+curl http://localhost:3000/api/campaigns/f3c0571f-a146-49a9-a9f0-67868c1bc044
+```
+
+**Paso 2** — Envía la solicitud de cancelación:
+```bash
+curl -X POST http://localhost:3000/api/campaigns/f3c0571f-a146-49a9-a9f0-67868c1bc044/cancel
+```
+
+**Paso 3** — Verifica la respuesta:
+```json
+{
+  "exito": true,
+  "mensaje": "Solicitud de cancelación enviada. El proceso se detendrá en el próximo mensaje."
+}
+```
+
+---
+
+### 🔌 POST `/api/disconnect` — Cerrar sesión
+
+**Paso 1** — Confirma que hay una sesión activa:
+```bash
+curl http://localhost:3000/api/status
+```
+
+**Paso 2** — Envía la solicitud de desconexión:
+```bash
+curl -X POST http://localhost:3000/api/disconnect
+```
+
+**Paso 3** — Verifica la respuesta:
+```json
+{
+  "exito": true,
+  "mensaje": "WhatsApp desconectado exitosamente"
+}
+```
+> ⚠️ Después de desconectar deberás escanear el QR de nuevo en `http://localhost:3000/api/qr`
 
 ---
 
@@ -220,11 +368,11 @@ whatsapp-api/
 ## 🛠️ Solución de problemas
 
 **El QR no aparece:**
-- Espera 5-10 segundos y recarga `/api/qr`
+- Espera 5-10 segundos y recarga `http://localhost:3000/api/qr`
 - Verifica que el servidor esté corriendo
 
 **Error "no está conectado":**
-- Escanea primero el QR en `/api/qr`
+- Escanea primero el QR en `http://localhost:3000/api/qr`
 - Verifica que el teléfono tenga internet
 
 **Mensajes no se envían:**
