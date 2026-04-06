@@ -1,25 +1,13 @@
 // ============================================================
-// MIDDLEWARE DE AUTENTICACIÓN (opcional)
-// Protege los endpoints con una API Key simple
+// MIDDLEWARE DE AUTENTICACIÓN
 // ============================================================
 const logger = require('../utils/logger');
+const { userDb } = require('../utils/database');
 
 /**
- * Middleware para verificar API Key en las peticiones
- * Activar agregando API_KEY en el .env y aplicando este middleware
- * a las rutas que quieras proteger
- *
- * Uso: router.post('/send/bulk', verificarApiKey, controlador)
+ * Middleware para verificar la API Key del usuario
  */
-function verificarApiKey(req, res, next) {
-  const apiKey = process.env.API_KEY;
-
-  // Si no hay API_KEY configurada, saltar la verificación
-  if (!apiKey) {
-    return next();
-  }
-
-  // Buscar la clave en el header Authorization o x-api-key
+async function verificarApiKey(req, res, next) {
   const keyRecibida =
     req.headers['x-api-key'] ||
     req.headers['authorization']?.replace('Bearer ', '');
@@ -32,15 +20,22 @@ function verificarApiKey(req, res, next) {
     });
   }
 
-  if (keyRecibida !== apiKey) {
-    logger.warn(`Acceso denegado a ${req.path} - API Key inválida`);
-    return res.status(403).json({
-      exito: false,
-      error: 'API Key inválida',
-    });
-  }
+  try {
+    const user = await userDb.obtenerPorApiKey(keyRecibida);
+    if (!user) {
+      logger.warn(`Acceso denegado a ${req.path} - API Key inválida`);
+      return res.status(403).json({
+        exito: false,
+        error: 'API Key inválida',
+      });
+    }
 
-  next();
+    req.user = user;
+    next();
+  } catch (error) {
+    logger.error('Error en autenticación:', error);
+    res.status(500).json({ error: 'Error interno de autenticación' });
+  }
 }
 
 module.exports = { verificarApiKey };

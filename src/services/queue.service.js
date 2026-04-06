@@ -24,24 +24,24 @@ async function procesarCampaña(campaignId, mensajes, opciones = {}) {
   const {
     delay_ms = 3000,
     io = null,
+    userId = null,
   } = opciones;
 
   const delayMin = parseInt(process.env.QUEUE_MIN_DELAY) || 2000;
   const delayMax = parseInt(process.env.QUEUE_MAX_DELAY) || 5000;
-  // Usar el delay del usuario como base, respetando mínimos
   const dMin = Math.min(delay_ms, delayMin);
   const dMax = Math.max(delay_ms, delayMax);
 
   colasActivas.set(campaignId, { procesando: true, cancelar: false });
-  logger.info(`🚀 Iniciando campaña ${campaignId} con ${mensajes.length} mensajes`);
+  logger.info(`🚀 [Usuario ${userId}] Iniciando campaña ${campaignId} con ${mensajes.length} mensajes`);
 
-  // Marcar campaña como en proceso
-  await campaignDb.actualizar(campaignId, { estado: 'en_proceso' });
+  await campaignDb.actualizar(campaignId, userId, { estado: 'en_proceso' });
 
   emitirProgreso(io, campaignId, {
     evento: 'campaña_iniciada',
     campaign_id: campaignId,
     total: mensajes.length,
+    userId
   });
 
   let enviados = 0;
@@ -49,37 +49,33 @@ async function procesarCampaña(campaignId, mensajes, opciones = {}) {
 
   for (let i = 0; i < mensajes.length; i++) {
     const msgData = mensajes[i];
-
-    // Verificar cancelación
     const estadoCola = colasActivas.get(campaignId);
     if (estadoCola?.cancelar) {
-      logger.info(`⛔ Campaña ${campaignId} cancelada`);
-      await campaignDb.actualizar(campaignId, {
+      logger.info(`⛔ [Usuario ${userId}] Campaña ${campaignId} cancelada`);
+      await campaignDb.actualizar(campaignId, userId, {
         estado: 'cancelada',
         enviados,
         fallidos,
         pendientes: mensajes.length - i,
       });
-      emitirProgreso(io, campaignId, { evento: 'campaña_cancelada', campaign_id: campaignId, enviados, fallidos });
+      emitirProgreso(io, campaignId, { evento: 'campaña_cancelada', campaign_id: campaignId, enviados, fallidos, userId });
       break;
     }
 
     try {
-      logger.info(`📨 Enviando mensaje ${i + 1}/${mensajes.length} a ${msgData.telefono}`);
+      logger.info(`📨 [Usuario ${userId}] Enviando mensaje ${i + 1}/${mensajes.length} a ${msgData.telefono}`);
 
       const textoFinal = reemplazarVariables(msgData.texto, msgData.variables);
-      await enviarMensaje(msgData.telefono, textoFinal, msgData);
+      await enviarMensaje(userId, msgData.telefono, textoFinal, msgData);
 
-      // Actualizar mensaje como enviado
-      await messageDb.actualizar(msgData.id, {
+      await messageDb.actualizar(msgData.id, userId, {
         estado: 'enviado',
         enviado_en: new Date(),
         intentos: (msgData.intentos || 0) + 1,
       });
 
-      // Actualizar contadores en campaña
       enviados++;
-      await campaignDb.actualizar(campaignId, {
+      await campaignDb.actualizar(campaignId, userId, {
         enviados,
         fallidos,
         pendientes: mensajes.length - enviados - fallidos,
@@ -90,6 +86,7 @@ async function procesarCampaña(campaignId, mensajes, opciones = {}) {
         campaign_id: campaignId,
         mensaje_id: msgData.id,
         telefono: msgData.telefono,
+        userId,
         progreso: {
           actual: i + 1,
           total: mensajes.length,
@@ -101,16 +98,16 @@ async function procesarCampaña(campaignId, mensajes, opciones = {}) {
       });
 
     } catch (error) {
-      logger.error(`❌ Error enviando a ${msgData.telefono}:`, error.message);
+      logger.error(`❌ [Usuario ${userId}] Error enviando a ${msgData.telefono}:`, error.message);
 
-      await messageDb.actualizar(msgData.id, {
+      await messageDb.actualizar(msgData.id, userId, {
         estado: 'fallido',
         error_detalle: error.message,
         intentos: (msgData.intentos || 0) + 1,
       });
 
       fallidos++;
-      await campaignDb.actualizar(campaignId, {
+      await campaignDb.actualizar(campaignId, userId, {
         enviados,
         fallidos,
         pendientes: mensajes.length - enviados - fallidos,
@@ -122,6 +119,7 @@ async function procesarCampaña(campaignId, mensajes, opciones = {}) {
         mensaje_id: msgData.id,
         telefono: msgData.telefono,
         error: error.message,
+        userId,
         progreso: {
           actual: i + 1,
           total: mensajes.length,
@@ -133,18 +131,16 @@ async function procesarCampaña(campaignId, mensajes, opciones = {}) {
       });
     }
 
-    // Delay entre mensajes (no en el último)
     if (i < mensajes.length - 1) {
       await esperarDelay(dMin, dMax);
     }
   }
 
-  // Finalizar campaña
   const estadoFinal = fallidos === mensajes.length ? 'error'
     : fallidos > 0 ? 'completada_con_errores'
     : 'completada';
 
-  await campaignDb.actualizar(campaignId, {
+  await campaignDb.actualizar(campaignId, userId, {
     estado: estadoFinal,
     enviados,
     fallidos,
@@ -153,23 +149,24 @@ async function procesarCampaña(campaignId, mensajes, opciones = {}) {
   });
 
   colasActivas.delete(campaignId);
-  logger.info(`✅ Campaña ${campaignId} finalizada. Enviados: ${enviados}, Fallidos: ${fallidos}`);
+  logger.info(`✅ [Usuario ${userId}] Campaña ${campaignId} finalizada. Enviados: ${enviados}, Fallidos: ${fallidos}`);
 
   emitirProgreso(io, campaignId, {
     evento: 'campaña_completada',
     campaign_id: campaignId,
+    userId,
     resumen: { total: mensajes.length, enviados, fallidos, estado: estadoFinal },
   });
 }
 
-async function enviarMensaje(telefono, texto, msgData) {
+async function enviarMensaje(userId, telefono, texto, msgData) {
   switch (msgData.tipo) {
     case 'imagen':
-      return await whatsappService.enviarImagen(telefono, msgData.archivo_url, texto);
+      return await whatsappService.enviarImagen(userId, telefono, msgData.archivo_url, texto);
     case 'documento':
-      return await whatsappService.enviarDocumento(telefono, msgData.archivo_url, msgData.nombre_archivo || 'documento', msgData.mime_type || 'application/octet-stream', texto || '');
+      return await whatsappService.enviarDocumento(userId, telefono, msgData.archivo_url, msgData.nombre_archivo || 'documento', msgData.mime_type || 'application/octet-stream', texto || '');
     default:
-      return await whatsappService.enviarTexto(telefono, texto);
+      return await whatsappService.enviarTexto(userId, telefono, texto);
   }
 }
 

@@ -11,7 +11,8 @@ const logger = require('../utils/logger');
  */
 async function obtenerEstado(req, res) {
   try {
-    const estado = whatsappService.obtenerEstado();
+    const userId = req.user.id;
+    const estado = whatsappService.obtenerEstado(userId);
 
     return res.json({
       exito: true,
@@ -42,8 +43,9 @@ async function obtenerEstado(req, res) {
  */
 async function obtenerQR(req, res) {
   try {
-    const qr = whatsappService.obtenerQR();
-    const estado = whatsappService.obtenerEstado();
+    const userId = req.user.id;
+    const qr = await whatsappService.obtenerQR(userId);
+    const estado = whatsappService.obtenerEstado(userId);
 
     if (estado.estado === 'conectado') {
       return res.json({
@@ -90,7 +92,8 @@ async function obtenerQR(req, res) {
  */
 async function desconectar(req, res) {
   try {
-    await whatsappService.desconectar();
+    const userId = req.user.id;
+    await whatsappService.desconectar(userId);
     return res.json({
       exito: true,
       mensaje: 'WhatsApp desconectado exitosamente',

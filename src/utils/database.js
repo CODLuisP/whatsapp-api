@@ -23,11 +23,36 @@ const sequelize = new Sequelize({
   logging: false, // Silenciar logs SQL (usamos nuestro propio logger)
 });
 
+// ── Modelo: Usuario ───────────────────────────────────────────
+const User = sequelize.define('User', {
+  id: {
+    type: DataTypes.STRING,
+    primaryKey: true,
+  },
+  nombre: {
+    type: DataTypes.STRING,
+    allowNull: false,
+  },
+  api_key: {
+    type: DataTypes.STRING,
+    allowNull: false,
+    unique: true,
+  },
+}, {
+  tableName: 'users',
+  underscored: true,
+});
+
 // ── Modelo: Campaña ───────────────────────────────────────────
 const Campaign = sequelize.define('Campaign', {
   id: {
     type: DataTypes.STRING,
     primaryKey: true,
+  },
+  user_id: {
+    type: DataTypes.STRING,
+    allowNull: true,
+    references: { model: User, key: 'id' },
   },
   nombre: {
     type: DataTypes.STRING,
@@ -55,6 +80,11 @@ const Message = sequelize.define('Message', {
     type: DataTypes.STRING,
     primaryKey: true,
   },
+  user_id: {
+    type: DataTypes.STRING,
+    allowNull: true,
+    references: { model: User, key: 'id' },
+  },
   campaign_id: {
     type: DataTypes.STRING,
     allowNull: true,
@@ -75,7 +105,13 @@ const Message = sequelize.define('Message', {
   underscored: true,
 });
 
-// Relación: una campaña tiene muchos mensajes
+// Relaciones
+User.hasMany(Campaign, { foreignKey: 'user_id' });
+Campaign.belongsTo(User, { foreignKey: 'user_id' });
+
+User.hasMany(Message, { foreignKey: 'user_id' });
+Message.belongsTo(User, { foreignKey: 'user_id' });
+
 Campaign.hasMany(Message, { foreignKey: 'campaign_id' });
 Message.belongsTo(Campaign, { foreignKey: 'campaign_id' });
 
@@ -83,27 +119,36 @@ Message.belongsTo(Campaign, { foreignKey: 'campaign_id' });
  * Inicializar la base de datos (crear tablas si no existen)
  */
 async function initDatabase() {
-  await sequelize.sync({ alter: false });
+  await sequelize.sync({ alter: true }); // enable alter to add the missing user_id fields
   logger.info('✅ Base de datos inicializada correctamente');
 }
+
+// ── Helpers para usuarios ─────────────────────────────────────
+const userDb = {
+  crear: (datos) => User.create(datos),
+  obtenerPorId: (id) => User.findByPk(id, { raw: true }),
+  obtenerPorApiKey: (api_key) => User.findOne({ where: { api_key }, raw: true }),
+  listarTodos: () => User.findAll({ raw: true }),
+};
 
 // ── Helpers para campañas ─────────────────────────────────────
 const campaignDb = {
   crear: (datos) => Campaign.create(datos),
 
-  actualizar: (id, datos) => Campaign.update(datos, { where: { id } }),
+  actualizar: (id, user_id, datos) => Campaign.update(datos, { where: { id, user_id } }),
 
-  obtenerPorId: (id) => Campaign.findByPk(id, { raw: true }),
+  obtenerPorId: (id, user_id) => Campaign.findOne({ where: { id, user_id }, raw: true }),
 
-  listarTodos: () => Campaign.findAll({
+  listarTodos: (user_id) => Campaign.findAll({
+    where: { user_id },
     order: [['created_at', 'DESC']],
     raw: true,
   }),
 
-  incrementarContador: async (id, campo) => {
+  incrementarContador: async (id, user_id, campo) => {
     await sequelize.query(
-      `UPDATE campaigns SET ${campo} = ${campo} + 1 WHERE id = :id`,
-      { replacements: { id } }
+      `UPDATE campaigns SET ${campo} = ${campo} + 1 WHERE id = :id AND user_id = :user_id`,
+      { replacements: { id, user_id } }
     );
   },
 };
@@ -114,19 +159,19 @@ const messageDb = {
 
   crearBatch: (mensajes) => Message.bulkCreate(mensajes),
 
-  actualizar: (id, datos) => Message.update(datos, { where: { id } }),
+  actualizar: (id, user_id, datos) => Message.update(datos, { where: { id, user_id } }),
 
-  listarPorCampaña: (campaignId) => Message.findAll({
-    where: { campaign_id: campaignId },
+  listarPorCampaña: (campaignId, user_id) => Message.findAll({
+    where: { campaign_id: campaignId, user_id },
     order: [['created_at', 'ASC']],
     raw: true,
   }),
 
-  obtenerPendientesPorCampaña: (campaignId) => Message.findAll({
-    where: { campaign_id: campaignId, estado: 'pendiente' },
+  obtenerPendientesPorCampaña: (campaignId, user_id) => Message.findAll({
+    where: { campaign_id: campaignId, user_id, estado: 'pendiente' },
     order: [['created_at', 'ASC']],
     raw: true,
   }),
 };
 
-module.exports = { initDatabase, sequelize, Campaign, Message, campaignDb, messageDb };
+module.exports = { initDatabase, sequelize, User, Campaign, Message, userDb, campaignDb, messageDb };

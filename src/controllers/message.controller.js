@@ -44,6 +44,7 @@ function eliminarArchivoLocal(fileUrl) {
  */
 async function enviarMensajeIndividual(req, res) {
   try {
+    const userId = req.user.id;
     const { phone, text, type = 'texto', file_url, filename, mime_type } = req.body;
 
     if (!phone) return res.status(400).json({ exito: false, error: 'El campo "phone" es requerido' });
@@ -56,13 +57,13 @@ async function enviarMensajeIndividual(req, res) {
     let resultado;
     switch (type) {
       case 'imagen':
-        resultado = await whatsappService.enviarImagen(phone, file_url, text || '');
+        resultado = await whatsappService.enviarImagen(userId, phone, file_url, text || '');
         break;
       case 'documento':
-        resultado = await whatsappService.enviarDocumento(phone, file_url, filename || 'documento', mime_type || 'application/octet-stream', text || '');
+        resultado = await whatsappService.enviarDocumento(userId, phone, file_url, filename || 'documento', mime_type || 'application/octet-stream', text || '');
         break;
       default:
-        resultado = await whatsappService.enviarTexto(phone, text);
+        resultado = await whatsappService.enviarTexto(userId, phone, text);
     }
 
     // ── Eliminar archivo del servidor después de enviarlo ─────
@@ -77,6 +78,7 @@ async function enviarMensajeIndividual(req, res) {
 
     await campaignDb.crear({
       id: campaignId,
+      user_id: userId,
       nombre: `Individual - ${phone}`,
       total_mensajes: 1,
       pendientes: 0,
@@ -85,6 +87,7 @@ async function enviarMensajeIndividual(req, res) {
 
     await messageDb.crear({
       id: messageId,
+      user_id: userId,
       campaign_id: campaignId,
       telefono: phone,
       texto: text,
@@ -92,18 +95,18 @@ async function enviarMensajeIndividual(req, res) {
       archivo_url: file_url || null,
     });
 
-    await messageDb.actualizar(messageId, {
+    await messageDb.actualizar(messageId, userId, {
       estado: 'enviado',
       enviado_en: new Date(),
     });
 
-    await campaignDb.actualizar(campaignId, {
+    await campaignDb.actualizar(campaignId, userId, {
       estado: 'completada',
       enviados: 1,
       completado_en: new Date(),
     });
 
-    logger.info(`✅ Mensaje individual enviado a ${phone}`);
+    logger.info(`✅ [Usuario ${userId}] Mensaje individual enviado a ${phone}`);
 
     return res.json({
       exito: true,
@@ -130,6 +133,7 @@ async function enviarMensajeIndividual(req, res) {
  */
 async function enviarMensajesMasivos(req, res) {
   try {
+    const userId = req.user.id;
     const { campaign_name, messages, delay_ms = 3000 } = req.body;
 
     if (!campaign_name) return res.status(400).json({ exito: false, error: '"campaign_name" es requerido' });
@@ -149,6 +153,7 @@ async function enviarMensajesMasivos(req, res) {
 
     await campaignDb.crear({
       id: campaignId,
+      user_id: userId,
       nombre: campaign_name,
       total_mensajes: messages.length,
       pendientes: messages.length,
@@ -159,6 +164,7 @@ async function enviarMensajesMasivos(req, res) {
       const { phone, text, type = 'texto', file_url, filename, mime_type, ...variablesExtra } = msg;
       return {
         id: uuidv4(),
+        user_id: userId,
         campaign_id: campaignId,
         telefono: phone,
         texto: text,
@@ -172,6 +178,7 @@ async function enviarMensajesMasivos(req, res) {
 
     await messageDb.crearBatch(mensajesPreparados.map(m => ({
       id: m.id,
+      user_id: m.user_id,
       campaign_id: m.campaign_id,
       telefono: m.telefono,
       texto: m.texto,
@@ -194,6 +201,7 @@ async function enviarMensajesMasivos(req, res) {
         await queueService.procesarCampaña(campaignId, mensajesPreparados, {
           delay_ms: delayFinal,
           io,
+          userId
         });
 
         // ── Eliminar archivos al finalizar toda la campaña ────
@@ -209,7 +217,7 @@ async function enviarMensajesMasivos(req, res) {
       }
     });
 
-    logger.info(`📢 Campaña "${campaign_name}" creada con ${messages.length} mensajes`);
+    logger.info(`📢 [Usuario ${userId}] Campaña "${campaign_name}" creada con ${messages.length} mensajes`);
 
     return res.status(202).json({
       exito: true,

@@ -1,5 +1,5 @@
 // ============================================================
-// PUNTO DE ENTRADA PRINCIPAL - WhatsApp Bulk API
+// PUNTO DE ENTRADA PRINCIPAL - WhatsApp Bulk API MULTIUSUARIO
 // ============================================================
 require('dotenv').config();
 
@@ -14,11 +14,13 @@ const fs = require('fs');
 const statusRoutes = require('./src/routes/status.routes');
 const messageRoutes = require('./src/routes/message.routes');
 const campaignRoutes = require('./src/routes/campaign.routes');
+const userRoutes = require('./src/routes/user.routes');
 
-// Importar servicios
+// Importar servicios y middlewares
 const whatsappService = require('./src/services/whatsapp.service');
 const { initDatabase } = require('./src/utils/database');
 const logger = require('./src/utils/logger');
+const { verificarApiKey } = require('./src/middlewares/auth.middleware');
 
 // ── Crear directorios necesarios ──────────────────────────────
 const dirs = [
@@ -69,24 +71,28 @@ app.use((req, res, next) => {
   next();
 });
 
-// ── Registrar rutas ───────────────────────────────────────────
-app.use('/api', statusRoutes);
-app.use('/api', messageRoutes);
-app.use('/api', campaignRoutes);
+// ── Registrar rutas públicas ──────────────────────────────────
+app.use('/api/users', userRoutes);
+
+// ── Registrar rutas protegidas ────────────────────────────────
+app.use('/api', verificarApiKey, statusRoutes);
+app.use('/api', verificarApiKey, messageRoutes);
+app.use('/api', verificarApiKey, campaignRoutes);
 
 // Ruta raíz con info de la API
 app.get('/', (req, res) => {
   res.json({
-    nombre: 'WhatsApp Bulk API',
+    nombre: 'WhatsApp Bulk API - Multiusuario',
     version: '1.0.0',
     estado: 'activo',
     endpoints: {
-      estado: 'GET /api/status',
-      qr: 'GET /api/qr',
-      enviarUno: 'POST /api/send/single',
-      enviarMasivo: 'POST /api/send/bulk',
-      campañas: 'GET /api/campaigns',
-      detalleCampaña: 'GET /api/campaigns/:id',
+      usuarios: 'POST /api/users/register',
+      estado: 'GET /api/status (Requiere x-api-key)',
+      qr: 'GET /api/qr (Requiere x-api-key)',
+      enviarUno: 'POST /api/send/single (Requiere x-api-key)',
+      enviarMasivo: 'POST /api/send/bulk (Requiere x-api-key)',
+      campañas: 'GET /api/campaigns (Requiere x-api-key)',
+      detalleCampaña: 'GET /api/campaigns/:id (Requiere x-api-key)',
     },
     websocket: 'Conectar a Socket.IO para progreso en tiempo real',
   });
@@ -129,7 +135,7 @@ async function iniciar() {
     await initDatabase();
 
     // 2. Inicializar servicio de WhatsApp
-    logger.info('Inicializando servicio de WhatsApp...');
+    logger.info('Inicializando servicio de WhatsApp (sistema multiusuario)...');
     await whatsappService.inicializar(io);
 
     // 3. Arrancar servidor HTTP
@@ -137,7 +143,8 @@ async function iniciar() {
     httpServer.listen(PORT, () => {
       logger.info(`✅ Servidor corriendo en http://localhost:${PORT}`);
       logger.info(`📡 Socket.IO listo para conexiones en tiempo real`);
-      logger.info(`📱 Escanea el QR en GET /api/qr`);
+      logger.info(`🔐 Crea un usuario en POST /api/users/register para obtener una API Key`);
+      logger.info(`📱 Obtén el QR enviando la API Key a GET /api/qr`);
     });
 
   } catch (error) {

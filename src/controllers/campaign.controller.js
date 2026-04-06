@@ -7,7 +7,8 @@ const queueService = require('../services/queue.service');
 
 async function listarCampañas(req, res) {
   try {
-    const campañas = await campaignDb.listarTodos();
+    const userId = req.user.id;
+    const campañas = await campaignDb.listarTodos(userId);
     const campañasConEstado = campañas.map(c => ({
       ...c,
       procesando_ahora: queueService.estaActiva(c.id),
@@ -27,11 +28,12 @@ async function listarCampañas(req, res) {
 
 async function obtenerCampaña(req, res) {
   try {
+    const userId = req.user.id;
     const { id } = req.params;
-    const campaña = await campaignDb.obtenerPorId(id);
+    const campaña = await campaignDb.obtenerPorId(id, userId);
     if (!campaña) return res.status(404).json({ exito: false, error: `Campaña "${id}" no encontrada` });
 
-    const mensajes = await messageDb.listarPorCampaña(id);
+    const mensajes = await messageDb.listarPorCampaña(id, userId);
     const estadisticas = {
       total: mensajes.length,
       enviados:  mensajes.filter(m => m.estado === 'enviado').length,
@@ -67,8 +69,9 @@ async function obtenerCampaña(req, res) {
 
 async function cancelarCampaña(req, res) {
   try {
+    const userId = req.user.id;
     const { id } = req.params;
-    const campaña = await campaignDb.obtenerPorId(id);
+    const campaña = await campaignDb.obtenerPorId(id, userId);
     if (!campaña) return res.status(404).json({ exito: false, error: `Campaña "${id}" no encontrada` });
     if (!queueService.estaActiva(id)) return res.status(400).json({ exito: false, error: 'La campaña no está activa' });
     const cancelado = queueService.cancelarCampaña(id);
@@ -81,11 +84,12 @@ async function cancelarCampaña(req, res) {
 
 async function eliminarCampaña(req, res) {
   try {
+    const userId = req.user.id;
     const { id } = req.params;
-    const campaña = await campaignDb.obtenerPorId(id);
+    const campaña = await campaignDb.obtenerPorId(id, userId);
     if (!campaña) return res.status(404).json({ exito: false, error: `Campaña "${id}" no encontrada` });
     if (queueService.estaActiva(id)) return res.status(400).json({ exito: false, error: 'Cancela la campaña antes de eliminarla' });
-    await campaignDb.actualizar(id, { estado: 'eliminada' });
+    await campaignDb.actualizar(id, userId, { estado: 'eliminada' });
     return res.json({ exito: true, mensaje: 'Campaña eliminada del historial' });
   } catch (error) {
     logger.error(`Error al eliminar campaña:`, error);

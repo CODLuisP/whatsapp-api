@@ -1,6 +1,6 @@
-# 📱 WhatsApp Bulk API
+# 📱 WhatsApp Bulk API - Multiusuario
 
-API REST completa para envío masivo de mensajes de WhatsApp usando **Node.js + Baileys**.
+API REST completa para envío masivo de mensajes de WhatsApp usando **Node.js + Baileys**. Ahora soporta múltiples usuarios conectados independientemente. Cada usuario cuenta con una sesión aislada mediante la generación de un `API Key`.
 
 ---
 
@@ -32,39 +32,43 @@ npm run dev
 npm start
 ```
 
-### 5. Escanear el QR
-- Abre `http://localhost:3000/api/qr` en tu navegador
-- Abre WhatsApp en tu teléfono → Dispositivos vinculados → Vincular dispositivo
-- Escanea el QR que aparece
+### 5. Configurar Usuario y conectar
+1. Haz una petición `POST` a `http://localhost:3000/api/users/register` mandando en el body `{"nombre": "Tu Nombre"}` para obtener un `api_key`.
+2. En toda subsecuente petición a `/api/*`, incluye un header llamado `x-api-key` con el valor de tu `api_key`.
+3. Abre `http://localhost:3000/api/qr` (asegurándote de inyectar el header) para obtener tu QR de WhatsApp en base64.
+4. Abre WhatsApp en tu teléfono → Dispositivos vinculados → Vincular dispositivo.
+5. Escanea el QR.
 
 ---
 
-## 📡 Endpoints
+## 📡 Endpoints (Requieren `x-api-key` salvo users)
+
+### Usuarios y Autenticación
+| Método | Ruta | Descripción |
+|--------|------|-------------|
+| POST | `/api/users/register` | Registrar un nuevo usuario y obtener un API Key (Libre) |
 
 ### Estado y QR
-
-| Método | Ruta | URL Completa | Descripción |
-|--------|------|--------------|-------------|
-| GET | `/api/status` | `http://localhost:3000/api/status` | Estado de conexión de WhatsApp |
-| GET | `/api/qr` | `http://localhost:3000/api/qr` | QR en base64 para escanear |
-| POST | `/api/disconnect` | `http://localhost:3000/api/disconnect` | Cerrar sesión |
+| Método | Ruta | Descripción |
+|--------|------|-------------|
+| GET | `/api/status` | Estado de conexión de WhatsApp (Por Usuario) |
+| GET | `/api/qr` | QR en base64 para escanear (Por Usuario) |
+| POST | `/api/disconnect` | Cerrar sesión (Por Usuario) |
 
 ### Mensajes
-
-| Método | Ruta | URL Completa | Descripción |
-|--------|------|--------------|-------------|
-| POST | `/api/send/single` | `http://localhost:3000/api/send/single` | Enviar mensaje individual |
-| POST | `/api/send/bulk` | `http://localhost:3000/api/send/bulk` | Envío masivo con campaña |
-| POST | `/api/upload` | `http://localhost:3000/api/upload` | Subir archivo (imagen/doc) |
+| Método | Ruta | Descripción |
+|--------|------|-------------|
+| POST | `/api/send/single` | Enviar mensaje individual |
+| POST | `/api/send/bulk` | Envío masivo con campaña |
+| POST | `/api/upload` | Subir archivo (imagen/doc) |
 
 ### Campañas
-
-| Método | Ruta | URL Completa | Descripción |
-|--------|------|--------------|-------------|
-| GET | `/api/campaigns` | `http://localhost:3000/api/campaigns` | Listar todas las campañas |
-| GET | `/api/campaigns/:id` | `http://localhost:3000/api/campaigns/CAMPAIGN_ID` | Detalle y progreso |
-| POST | `/api/campaigns/:id/cancel` | `http://localhost:3000/api/campaigns/CAMPAIGN_ID/cancel` | Cancelar campaña activa |
-| DELETE | `/api/campaigns/:id` | `http://localhost:3000/api/campaigns/CAMPAIGN_ID` | Eliminar del historial |
+| Método | Ruta | Descripción |
+|--------|------|-------------|
+| GET | `/api/campaigns` | Listar todas las campañas (Filtrado por usuario) |
+| GET | `/api/campaigns/:id` | Detalle y progreso |
+| POST | `/api/campaigns/:id/cancel` | Cancelar campaña activa |
+| DELETE | `/api/campaigns/:id` | Eliminar del historial |
 
 ---
 

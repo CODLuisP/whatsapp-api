@@ -1,5 +1,5 @@
 // ============================================================
-// SERVICIO DE WHATSAPP - Núcleo de Baileys
+// SERVICIO DE WHATSAPP - Núcleo de Baileys MULTIUSUARIO
 // Maneja la conexión, autenticación y envío de mensajes
 // ============================================================
 const {
@@ -21,133 +21,133 @@ const pino = require('pino');
 const logger = require('../utils/logger');
 
 // ── Configuración ─────────────────────────────────────────────
-const SESSION_DIR = process.env.SESSION_DIR || './sessions';
+const BASE_SESSION_DIR = process.env.SESSION_DIR || './sessions';
 
 // ── Estado global del servicio ────────────────────────────────
-let socket = null;          // Socket de Baileys
-let qrBase64 = null;        // QR actual en base64
-let estadoConexion = 'desconectado'; // desconectado | conectando | qr | conectado
+// Mapa que almacenará las sesiones activas por userId
+// sessions.get(userId) = { socket, qrBase64, estadoConexion, intentosReconexion }
+const sessions = new Map();
+
 let ioInstance = null;      // Referencia a Socket.IO
-let intentosReconexion = 0;
 const MAX_INTENTOS = 5;
 
 /**
- * Emitir evento a todos los clientes Socket.IO conectados
+ * Emitir evento a todos los clientes Socket.IO conectados (opcionalmente filtrado por usuario)
  */
-function emitir(evento, datos) {
+function emitir(userId, evento, datos) {
   if (ioInstance) {
-    ioInstance.emit(evento, datos);
+    // Si quisieras aislar sockets por usuario, tendrías que usar ioInstance.to(userId)
+    // Para simplificar, emitimos globalmente, pero enviando el userId para que el cliente lo filtre
+    ioInstance.emit(evento, { ...datos, userId });
   }
 }
 
 /**
- * Inicializar la conexión con WhatsApp
- * @param {Object} io - Instancia de Socket.IO
+ * Inicializar la referencia a Socket.IO
  */
 async function inicializar(io) {
   ioInstance = io;
-  await conectar();
+  logger.info('Servicio multiusuario de WhatsApp inicializado (esperando conexiones de usuarios)');
 }
 
 /**
- * Conectar o reconectar a WhatsApp
+ * Obtener o inicializar sesión para un usuario
  */
-async function conectar() {
+function obtenerSesion(userId) {
+  if (!sessions.has(userId)) {
+    sessions.set(userId, {
+      socket: null,
+      qrBase64: null,
+      estadoConexion: 'desconectado',
+      intentosReconexion: 0
+    });
+  }
+  return sessions.get(userId);
+}
+
+/**
+ * Conectar o reconectar a WhatsApp para un usuario
+ */
+async function conectar(userId) {
+  const sesion = obtenerSesion(userId);
   try {
-    estadoConexion = 'conectando';
-    logger.info('Iniciando conexión con WhatsApp...');
+    sesion.estadoConexion = 'conectando';
+    logger.info(`[Usuario ${userId}] Iniciando conexión con WhatsApp...`);
 
-    // Obtener la versión más reciente de WhatsApp Web
     const { version, isLatest } = await fetchLatestBaileysVersion();
-    logger.info(`Usando Baileys versión WA: ${version.join('.')} - ¿Es la más reciente? ${isLatest}`);
+    
+    // Directorio individual por usuario
+    const userSessionDir = path.join(BASE_SESSION_DIR, userId);
+    if (!fs.existsSync(userSessionDir)) {
+      fs.mkdirSync(userSessionDir, { recursive: true });
+    }
 
-    // Cargar o crear credenciales de sesión desde archivos
-    const { state, saveCreds } = await useMultiFileAuthState(SESSION_DIR);
+    const { state, saveCreds } = await useMultiFileAuthState(userSessionDir);
 
-    // Crear socket de WhatsApp con configuración optimizada
-    socket = makeWASocket({
+    sesion.socket = makeWASocket({
       version,
       auth: state,
-      // Logger silencioso para no saturar la consola (usamos el nuestro)
       logger: pino({ level: 'silent' }),
-      // Configuración para evitar bloqueos
       markOnlineOnConnect: false,
       generateHighQualityLinkPreview: false,
-      // Tiempo de espera para conexión
       connectTimeoutMs: 60_000,
       defaultQueryTimeoutMs: 60_000,
       keepAliveIntervalMs: 30_000,
     });
 
-    // ── Evento: Actualización de credenciales ──────────────────
-    // Se dispara cuando hay nuevas credenciales que guardar
-    socket.ev.on('creds.update', saveCreds);
+    sesion.socket.ev.on('creds.update', saveCreds);
 
-    // ── Evento: Cambio de estado de conexión ──────────────────
-    socket.ev.on('connection.update', async (update) => {
+    sesion.socket.ev.on('connection.update', async (update) => {
       const { connection, lastDisconnect, qr } = update;
 
-      // Si hay un nuevo QR para escanear
       if (qr) {
-        intentosReconexion = 0;
-        estadoConexion = 'qr';
-        logger.info('📱 Nuevo QR generado - Escanea con WhatsApp');
+        sesion.intentosReconexion = 0;
+        sesion.estadoConexion = 'qr';
+        logger.info(`[Usuario ${userId}] Nuevo QR generado.`);
 
-        // Convertir QR a base64 para enviarlo al frontend
         try {
-          qrBase64 = await QRCode.toDataURL(qr);
-          // Notificar a clientes conectados por Socket.IO
-          emitir('qr_actualizado', { qr: qrBase64 });
-          logger.info('QR disponible en GET /api/qr');
+          sesion.qrBase64 = await QRCode.toDataURL(qr);
+          emitir(userId, 'qr_actualizado', { qr: sesion.qrBase64 });
         } catch (err) {
-          logger.error('Error al generar QR en base64:', err);
+          logger.error(`[Usuario ${userId}] Error generando QR en base64:`, err);
         }
       }
 
-      // Cambio de estado de la conexión
       if (connection === 'close') {
-        qrBase64 = null;
-        estadoConexion = 'desconectado';
+        sesion.qrBase64 = null;
+        sesion.estadoConexion = 'desconectado';
 
         const statusCode = lastDisconnect?.error instanceof Boom
           ? lastDisconnect.error.output.statusCode
           : 500;
 
-        const razon = DisconnectReason;
-        logger.warn(`Conexión cerrada. Código: ${statusCode}`);
+        logger.warn(`[Usuario ${userId}] Conexión cerrada. Código: ${statusCode}`);
 
-        // Decidir si reconectar según el motivo de desconexión
-        const debeReconectar =
-          statusCode !== DisconnectReason.loggedOut &&
-          statusCode !== DisconnectReason.badSession;
+        const debeReconectar = statusCode !== DisconnectReason.loggedOut && statusCode !== DisconnectReason.badSession;
 
-        if (debeReconectar && intentosReconexion < MAX_INTENTOS) {
-          intentosReconexion++;
-          const delay = Math.min(1000 * Math.pow(2, intentosReconexion), 30000);
-          logger.info(`Reconectando en ${delay / 1000}s... (intento ${intentosReconexion}/${MAX_INTENTOS})`);
-
-          emitir('estado_conexion', { estado: 'reconectando', intento: intentosReconexion });
-
-          setTimeout(() => conectar(), delay);
+        if (debeReconectar && sesion.intentosReconexion < MAX_INTENTOS) {
+          sesion.intentosReconexion++;
+          const delay = Math.min(1000 * Math.pow(2, sesion.intentosReconexion), 30000);
+          logger.info(`[Usuario ${userId}] Reconectando en ${delay / 1000}s... (intento ${sesion.intentosReconexion}/${MAX_INTENTOS})`);
+          emitir(userId, 'estado_conexion', { estado: 'reconectando', intento: sesion.intentosReconexion });
+          setTimeout(() => conectar(userId), delay);
         } else if (statusCode === DisconnectReason.loggedOut) {
-          // Sesión cerrada - limpiar archivos de sesión
-          logger.warn('Sesión cerrada por el usuario. Limpiando archivos de sesión...');
-          limpiarSesion();
-          // Reiniciar para mostrar nuevo QR
-          setTimeout(() => conectar(), 2000);
+          logger.warn(`[Usuario ${userId}] Sesión cerrada. Limpiando archivos...`);
+          limpiarSesion(userId);
+          setTimeout(() => conectar(userId), 2000);
         } else {
-          logger.error('No se puede reconectar. Revisa la configuración.');
-          emitir('estado_conexion', { estado: 'error', mensaje: 'No se puede reconectar' });
+          logger.error(`[Usuario ${userId}] No se puede reconectar. Intenta reescanear el QR.`);
+          emitir(userId, 'estado_conexion', { estado: 'error', mensaje: 'No se puede reconectar' });
         }
       }
 
       if (connection === 'open') {
-        intentosReconexion = 0;
-        estadoConexion = 'conectado';
-        qrBase64 = null;
-        const user = socket.user;
-        logger.info(`✅ WhatsApp conectado como: ${user?.name || 'Desconocido'} (${user?.id})`);
-        emitir('estado_conexion', {
+        sesion.intentosReconexion = 0;
+        sesion.estadoConexion = 'conectado';
+        sesion.qrBase64 = null;
+        const user = sesion.socket.user;
+        logger.info(`[Usuario ${userId}] ✅ Conectado como: ${user?.name || 'Desconocido'} (${user?.id})`);
+        emitir(userId, 'estado_conexion', {
           estado: 'conectado',
           usuario: user?.name,
           numero: user?.id,
@@ -155,26 +155,25 @@ async function conectar() {
       }
 
       if (connection === 'connecting') {
-        estadoConexion = 'conectando';
-        emitir('estado_conexion', { estado: 'conectando' });
+        sesion.estadoConexion = 'conectando';
+        emitir(userId, 'estado_conexion', { estado: 'conectando' });
       }
     });
 
-    // ── Evento: Mensajes recibidos (opcional, para logging) ───
-    socket.ev.on('messages.upsert', ({ messages, type }) => {
+    sesion.socket.ev.on('messages.upsert', ({ messages, type }) => {
       if (type === 'notify') {
         messages.forEach(msg => {
           if (!msg.key.fromMe) {
-            logger.info(`Mensaje recibido de: ${msg.key.remoteJid}`);
+            logger.info(`[Usuario ${userId}] Mensaje recibido de ${msg.key.remoteJid}`);
           }
         });
       }
     });
 
   } catch (error) {
-    logger.error('Error crítico al conectar con WhatsApp:', error);
-    estadoConexion = 'error';
-    emitir('estado_conexion', { estado: 'error', mensaje: error.message });
+    logger.error(`[Usuario ${userId}] Error crítico al conectar:`, error);
+    sesion.estadoConexion = 'error';
+    emitir(userId, 'estado_conexion', { estado: 'error', mensaje: error.message });
     throw error;
   }
 }
@@ -182,86 +181,77 @@ async function conectar() {
 /**
  * Limpiar archivos de sesión guardados
  */
-function limpiarSesion() {
+function limpiarSesion(userId) {
   try {
-    if (fs.existsSync(SESSION_DIR)) {
-      fs.readdirSync(SESSION_DIR).forEach(archivo => {
-        fs.unlinkSync(path.join(SESSION_DIR, archivo));
+    const userSessionDir = path.join(BASE_SESSION_DIR, userId);
+    if (fs.existsSync(userSessionDir)) {
+      fs.readdirSync(userSessionDir).forEach(archivo => {
+        fs.unlinkSync(path.join(userSessionDir, archivo));
       });
-      logger.info('Archivos de sesión eliminados');
+      logger.info(`[Usuario ${userId}] Archivos de sesión eliminados`);
     }
   } catch (err) {
-    logger.error('Error al limpiar sesión:', err);
+    logger.error(`[Usuario ${userId}] Error al limpiar sesión:`, err);
   }
 }
 
 /**
- * Verificar que el socket esté conectado
+ * Verificar que el socket esté conectado para un usuario
  */
-function verificarConexion() {
-  if (!socket || estadoConexion !== 'conectado') {
-    throw new Error('WhatsApp no está conectado. Escanea el QR primero.');
+function verificarConexion(userId) {
+  const sesion = obtenerSesion(userId);
+  if (!sesion.socket || sesion.estadoConexion !== 'conectado') {
+    throw new Error(`WhatsApp no está conectado para el usuario ${userId}. Escanea el QR primero.`);
   }
+  return sesion.socket;
 }
 
 /**
  * Normalizar número de teléfono al formato JID de WhatsApp
- * @param {string|number} telefono - Número con código de país
- * @returns {string} JID de WhatsApp (ej: 51987654321@s.whatsapp.net)
  */
 function normalizarTelefono(telefono) {
-  // Remover caracteres no numéricos
   const numero = String(telefono).replace(/\D/g, '');
   return `${numero}@s.whatsapp.net`;
 }
 
 /**
  * Verificar si un número existe en WhatsApp
- * @param {string} telefono
- * @returns {boolean}
  */
-async function verificarNumero(telefono) {
+async function verificarNumero(userId, telefono) {
   try {
-    verificarConexion();
+    const socket = verificarConexion(userId);
     const jid = normalizarTelefono(telefono);
     const [resultado] = await socket.onWhatsApp(jid);
     return resultado?.exists || false;
   } catch (error) {
-    logger.error(`Error al verificar número ${telefono}:`, error);
+    logger.error(`[Usuario ${userId}] Error al verificar número ${telefono}:`, error);
     return false;
   }
 }
 
 /**
  * Enviar mensaje de texto simple
- * @param {string} telefono - Número con código de país
- * @param {string} texto - Contenido del mensaje
  */
-async function enviarTexto(telefono, texto) {
-  verificarConexion();
+async function enviarTexto(userId, telefono, texto) {
+  const socket = verificarConexion(userId);
   const jid = normalizarTelefono(telefono);
 
   const resultado = await socket.sendMessage(jid, { text: texto });
-  logger.info(`✉️ Texto enviado a ${telefono}`);
+  logger.info(`[Usuario ${userId}] ✉️ Texto enviado a ${telefono}`);
   return resultado;
 }
 
 /**
  * Enviar imagen con caption opcional
- * @param {string} telefono
- * @param {string} rutaImagen - Ruta local o URL de la imagen
- * @param {string} caption - Texto debajo de la imagen
  */
-async function enviarImagen(telefono, rutaImagen, caption = '') {
-  verificarConexion();
+async function enviarImagen(userId, telefono, rutaImagen, caption = '') {
+  const socket = verificarConexion(userId);
   const jid = normalizarTelefono(telefono);
 
   let imagen;
   if (rutaImagen.startsWith('http')) {
-    // Si es URL remota
     imagen = { url: rutaImagen };
   } else {
-    // Si es archivo local
     imagen = fs.readFileSync(rutaImagen);
   }
 
@@ -270,19 +260,15 @@ async function enviarImagen(telefono, rutaImagen, caption = '') {
     caption,
   });
 
-  logger.info(`🖼️ Imagen enviada a ${telefono}`);
+  logger.info(`[Usuario ${userId}] 🖼️ Imagen enviada a ${telefono}`);
   return resultado;
 }
 
 /**
  * Enviar documento/archivo
- * @param {string} telefono
- * @param {string} rutaArchivo - Ruta local del documento
- * @param {string} nombreArchivo - Nombre a mostrar
- * @param {string} mimeType - Tipo MIME del archivo
  */
-async function enviarDocumento(telefono, rutaArchivo, nombreArchivo, mimeType = 'application/octet-stream', caption = '') {
-  verificarConexion();
+async function enviarDocumento(userId, telefono, rutaArchivo, nombreArchivo, mimeType = 'application/octet-stream', caption = '') {
+  const socket = verificarConexion(userId);
   const jid = normalizarTelefono(telefono);
 
   let documento;
@@ -299,39 +285,46 @@ async function enviarDocumento(telefono, rutaArchivo, nombreArchivo, mimeType = 
     caption: caption || undefined,
   });
 
-  logger.info(`📄 Documento enviado a ${telefono}`);
+  logger.info(`[Usuario ${userId}] 📄 Documento enviado a ${telefono}`);
   return resultado;
 }
 
 /**
- * Obtener el estado actual de la conexión
+ * Obtener el estado actual de la conexión de un usuario
  */
-function obtenerEstado() {
+function obtenerEstado(userId) {
+  const sesion = obtenerSesion(userId);
   return {
-    estado: estadoConexion,
-    usuario: socket?.user?.name || null,
-    numero: socket?.user?.id || null,
-    tieneQR: !!qrBase64,
+    estado: sesion.estadoConexion,
+    usuario: sesion.socket?.user?.name || null,
+    numero: sesion.socket?.user?.id || null,
+    tieneQR: !!sesion.qrBase64,
   };
 }
 
 /**
- * Obtener el QR actual en base64
+ * Obtener el QR actual en base64 de un usuario
  */
-function obtenerQR() {
-  return qrBase64;
+async function obtenerQR(userId) {
+  const sesion = obtenerSesion(userId);
+  // Si no está conectado y no hay QR, intentamos conectar/reconectar
+  if (sesion.estadoConexion === 'desconectado' && !sesion.qrBase64) {
+    await conectar(userId);
+  }
+  return sesion.qrBase64;
 }
 
 /**
- * Cerrar la conexión con WhatsApp
+ * Cerrar la conexión con WhatsApp de un usuario
  */
-async function desconectar() {
-  if (socket) {
-    await socket.logout();
-    socket = null;
-    estadoConexion = 'desconectado';
-    qrBase64 = null;
-    logger.info('WhatsApp desconectado manualmente');
+async function desconectar(userId) {
+  const sesion = obtenerSesion(userId);
+  if (sesion.socket) {
+    await sesion.socket.logout();
+    sesion.socket = null;
+    sesion.estadoConexion = 'desconectado';
+    sesion.qrBase64 = null;
+    logger.info(`[Usuario ${userId}] WhatsApp desconectado manualmente`);
   }
 }
 
