@@ -250,7 +250,10 @@ async function enviarImagen(userId, telefono, rutaImagen, caption = '') {
 
   let imagen;
   if (rutaImagen.startsWith('http')) {
-    imagen = { url: rutaImagen };
+    const nombreArchivo = path.basename(rutaImagen);
+    const uploadsDir = process.env.UPLOADS_DIR || './uploads';
+    const rutaLocal = path.join(uploadsDir, nombreArchivo);
+    imagen = fs.readFileSync(rutaLocal);
   } else {
     imagen = fs.readFileSync(rutaImagen);
   }
@@ -273,7 +276,10 @@ async function enviarDocumento(userId, telefono, rutaArchivo, nombreArchivo, mim
 
   let documento;
   if (rutaArchivo.startsWith('http')) {
-    documento = { url: rutaArchivo };
+    const nombreArchivoLocal = path.basename(rutaArchivo);
+    const uploadsDir = process.env.UPLOADS_DIR || './uploads';
+    const rutaLocal = path.join(uploadsDir, nombreArchivoLocal);
+    documento = fs.readFileSync(rutaLocal);
   } else {
     documento = fs.readFileSync(rutaArchivo);
   }
