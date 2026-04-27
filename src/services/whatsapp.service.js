@@ -59,10 +59,37 @@ function obtenerSesion(userId) {
       socket: null,
       qrBase64: null,
       estadoConexion: 'desconectado',
-      intentosReconexion: 0
+      intentosReconexion: 0,
+      readyPromise: null,
+      resolveReady: null,
     });
   }
   return sessions.get(userId);
+}
+
+/**
+ * Restaurar todas las sesiones guardadas en el disco al iniciar el servidor
+ */
+async function restaurarSesiones() {
+  try {
+    if (!fs.existsSync(BASE_SESSION_DIR)) return;
+    
+    const folders = fs.readdirSync(BASE_SESSION_DIR);
+    logger.info(`🔍 Restaurando ${folders.length} sesiones encontradas en disco...`);
+    
+    for (const userId of folders) {
+      const userPath = path.join(BASE_SESSION_DIR, userId);
+      if (fs.lstatSync(userPath).isDirectory()) {
+        // Solo restaurar si hay archivos de credenciales
+        if (fs.existsSync(path.join(userPath, 'creds.json'))) {
+          logger.info(`[Usuario ${userId}] Auto-conectando...`);
+          conectar(userId).catch(err => logger.error(`Error auto-conectando ${userId}:`, err));
+        }
+      }
+    }
+  } catch (err) {
+    logger.error('Error al restaurar sesiones:', err);
+  }
 }
 
 /**
@@ -84,15 +111,23 @@ async function conectar(userId) {
 
     const { state, saveCreds } = await useMultiFileAuthState(userSessionDir);
 
+    // Crear promesa de "listo" si no existe
+    if (!sesion.readyPromise) {
+      sesion.readyPromise = new Promise((resolve) => {
+        sesion.resolveReady = resolve;
+      });
+    }
+
     sesion.socket = makeWASocket({
       version,
       auth: state,
       logger: pino({ level: 'silent' }),
-      markOnlineOnConnect: false,
+      markOnlineOnConnect: true,
       generateHighQualityLinkPreview: false,
       connectTimeoutMs: 60_000,
       defaultQueryTimeoutMs: 60_000,
       keepAliveIntervalMs: 30_000,
+      printQRInTerminal: false,
     });
 
     sesion.socket.ev.on('creds.update', saveCreds);
@@ -147,6 +182,18 @@ async function conectar(userId) {
         sesion.qrBase64 = null;
         const user = sesion.socket.user;
         logger.info(`[Usuario ${userId}] ✅ Conectado como: ${user?.name || 'Desconocido'} (${user?.id})`);
+        
+        // "Calentar" la conexión y marcar como disponible
+        await sesion.socket.sendPresenceUpdate('available');
+        
+        // Dar un pequeño margen para sincronización interna
+        setTimeout(() => {
+          if (sesion.resolveReady) {
+            sesion.resolveReady(true);
+            sesion.resolveReady = null;
+          }
+        }, 2000);
+
         emitir(userId, 'estado_conexion', {
           estado: 'conectado',
           usuario: user?.name,
@@ -197,12 +244,31 @@ function limpiarSesion(userId) {
 
 /**
  * Verificar que el socket esté conectado para un usuario
+ * Si no está conectado pero existe sesión, intenta conectar automáticamente
  */
-function verificarConexion(userId) {
+async function verificarConexion(userId) {
   const sesion = obtenerSesion(userId);
+  const userSessionDir = path.join(BASE_SESSION_DIR, userId);
+  const hasSessionFiles = fs.existsSync(path.join(userSessionDir, 'creds.json'));
+
+  // Si no hay socket y hay archivos, conectar
+  if (!sesion.socket && hasSessionFiles) {
+    logger.info(`[Usuario ${userId}] Detectada sesión en disco. Auto-conectando antes de enviar...`);
+    await conectar(userId);
+  }
+
+  // Si está conectando, esperar a que esté listo
+  if (sesion.estadoConexion === 'conectando' || sesion.estadoConexion === 'qr') {
+    logger.info(`[Usuario ${userId}] Esperando a que la conexión esté lista...`);
+    if (sesion.readyPromise) {
+      await sesion.readyPromise;
+    }
+  }
+
   if (!sesion.socket || sesion.estadoConexion !== 'conectado') {
     throw new Error(`WhatsApp no está conectado para el usuario ${userId}. Escanea el QR primero.`);
   }
+
   return sesion.socket;
 }
 
@@ -219,7 +285,7 @@ function normalizarTelefono(telefono) {
  */
 async function verificarNumero(userId, telefono) {
   try {
-    const socket = verificarConexion(userId);
+    const socket = await verificarConexion(userId);
     const jid = normalizarTelefono(telefono);
     const [resultado] = await socket.onWhatsApp(jid);
     return resultado?.exists || false;
@@ -230,69 +296,96 @@ async function verificarNumero(userId, telefono) {
 }
 
 /**
- * Enviar mensaje de texto simple
+ * Enviar mensaje de texto simple con reintentos
  */
-async function enviarTexto(userId, telefono, texto) {
-  const socket = verificarConexion(userId);
-  const jid = normalizarTelefono(telefono);
+async function enviarTexto(userId, telefono, texto, intentos = 0) {
+  try {
+    const socket = await verificarConexion(userId);
+    const jid = normalizarTelefono(telefono);
 
-  const resultado = await socket.sendMessage(jid, { text: texto });
-  logger.info(`[Usuario ${userId}] ✉️ Texto enviado a ${telefono}`);
-  return resultado;
+    const resultado = await socket.sendMessage(jid, { text: texto });
+    logger.info(`[Usuario ${userId}] ✉️ Texto enviado a ${telefono}`);
+    return resultado;
+  } catch (error) {
+    if (intentos < 1) {
+      logger.warn(`[Usuario ${userId}] Reintentando envío de texto a ${telefono}...`);
+      await new Promise(r => setTimeout(r, 1000));
+      return enviarTexto(userId, telefono, texto, intentos + 1);
+    }
+    throw error;
+  }
 }
 
 /**
- * Enviar imagen con caption opcional
+ * Enviar imagen con caption opcional con reintentos
  */
-async function enviarImagen(userId, telefono, rutaImagen, caption = '') {
-  const socket = verificarConexion(userId);
-  const jid = normalizarTelefono(telefono);
+async function enviarImagen(userId, telefono, rutaImagen, caption = '', intentos = 0) {
+  try {
+    const socket = await verificarConexion(userId);
+    const jid = normalizarTelefono(telefono);
 
-  let imagen;
-  if (rutaImagen.startsWith('http')) {
-    const nombreArchivo = path.basename(rutaImagen);
-    const uploadsDir = process.env.UPLOADS_DIR || './uploads';
-    const rutaLocal = path.join(uploadsDir, nombreArchivo);
-    imagen = fs.readFileSync(rutaLocal);
-  } else {
-    imagen = fs.readFileSync(rutaImagen);
+    let imagen;
+    if (rutaImagen.startsWith('http')) {
+      const nombreArchivo = path.basename(rutaImagen);
+      const uploadsDir = process.env.UPLOADS_DIR || './uploads';
+      const rutaLocal = path.join(uploadsDir, nombreArchivo);
+      imagen = fs.readFileSync(rutaLocal);
+    } else {
+      imagen = fs.readFileSync(rutaImagen);
+    }
+
+    const resultado = await socket.sendMessage(jid, {
+      image: imagen,
+      caption,
+    });
+
+    logger.info(`[Usuario ${userId}] 🖼️ Imagen enviada a ${telefono}`);
+    return resultado;
+  } catch (error) {
+    if (intentos < 1) {
+      logger.warn(`[Usuario ${userId}] Reintentando envío de imagen a ${telefono}...`);
+      await new Promise(r => setTimeout(r, 1000));
+      return enviarImagen(userId, telefono, rutaImagen, caption, intentos + 1);
+    }
+    throw error;
   }
-
-  const resultado = await socket.sendMessage(jid, {
-    image: imagen,
-    caption,
-  });
-
-  logger.info(`[Usuario ${userId}] 🖼️ Imagen enviada a ${telefono}`);
-  return resultado;
 }
 
 /**
- * Enviar documento/archivo
+ * Enviar documento/archivo con reintentos
  */
-async function enviarDocumento(userId, telefono, rutaArchivo, nombreArchivo, mimeType = 'application/octet-stream', caption = '') {
-  const socket = verificarConexion(userId);
-  const jid = normalizarTelefono(telefono);
+async function enviarDocumento(userId, telefono, rutaArchivo, nombreArchivo, mimeType = 'application/octet-stream', caption = '', intentos = 0) {
+  try {
+    const socket = await verificarConexion(userId);
+    const jid = normalizarTelefono(telefono);
 
-  let documento;
-  if (rutaArchivo.startsWith('http')) {
-    const nombreArchivoLocal = path.basename(rutaArchivo);
-    const uploadsDir = process.env.UPLOADS_DIR || './uploads';
-    const rutaLocal = path.join(uploadsDir, nombreArchivoLocal);
-    documento = fs.readFileSync(rutaLocal);
-  } else {
-    documento = fs.readFileSync(rutaArchivo);
+    let documento;
+    if (rutaArchivo.startsWith('http')) {
+      const nombreArchivoLocal = path.basename(rutaArchivo);
+      const uploadsDir = process.env.UPLOADS_DIR || './uploads';
+      const rutaLocal = path.join(uploadsDir, nombreArchivoLocal);
+      documento = fs.readFileSync(rutaLocal);
+    } else {
+      documento = fs.readFileSync(rutaArchivo);
+    }
+
+    const resultado = await socket.sendMessage(jid, {
+      document: documento,
+      fileName: nombreArchivo,
+      mimetype: mimeType,
+      caption: caption || undefined,
+    });
+
+    logger.info(`[Usuario ${userId}] 📄 Documento enviado a ${telefono}`);
+    return resultado;
+  } catch (error) {
+    if (intentos < 1) {
+      logger.warn(`[Usuario ${userId}] Reintentando envío de documento a ${telefono}...`);
+      await new Promise(r => setTimeout(r, 1000));
+      return enviarDocumento(userId, telefono, rutaArchivo, nombreArchivo, mimeType, caption, intentos + 1);
+    }
+    throw error;
   }
-
-  const resultado = await socket.sendMessage(jid, {
-    document: documento,
-    fileName: nombreArchivo,
-    mimetype: mimeType,
-    caption: caption || undefined,
-  });
-
-  logger.info(`[Usuario ${userId}] 📄 Documento enviado a ${telefono}`);
-  return resultado;
 }
 
 /**
@@ -336,6 +429,7 @@ async function desconectar(userId) {
 
 module.exports = {
   inicializar,
+  restaurarSesiones,
   enviarTexto,
   enviarImagen,
   enviarDocumento,

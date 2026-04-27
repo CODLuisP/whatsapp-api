@@ -137,6 +137,9 @@ async function iniciar() {
     // 2. Inicializar servicio de WhatsApp
     logger.info('Inicializando servicio de WhatsApp (sistema multiusuario)...');
     await whatsappService.inicializar(io);
+    
+    // 2.1 Restaurar sesiones existentes
+    await whatsappService.restaurarSesiones();
 
     // 3. Arrancar servidor HTTP
     const PORT = process.env.PORT || 3000;
