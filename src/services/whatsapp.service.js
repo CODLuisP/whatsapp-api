@@ -111,8 +111,8 @@ async function conectar(userId) {
 
     const { state, saveCreds } = await useMultiFileAuthState(userSessionDir);
 
-    // Crear promesa de "listo" si no existe
-    if (!sesion.readyPromise) {
+    // Crear promesa de "listo" si no existe o si ya fue resuelta
+    if (!sesion.readyPromise || !sesion.resolveReady) {
       sesion.readyPromise = new Promise((resolve) => {
         sesion.resolveReady = resolve;
       });
@@ -162,16 +162,32 @@ async function conectar(userId) {
 
         if (debeReconectar && sesion.intentosReconexion < MAX_INTENTOS) {
           sesion.intentosReconexion++;
+          sesion.estadoConexion = 'reconectando';
+          
+          if (!sesion.resolveReady) {
+            sesion.readyPromise = new Promise((resolve) => {
+              sesion.resolveReady = resolve;
+            });
+          }
+
           const delay = Math.min(1000 * Math.pow(2, sesion.intentosReconexion), 30000);
           logger.info(`[Usuario ${userId}] Reconectando en ${delay / 1000}s... (intento ${sesion.intentosReconexion}/${MAX_INTENTOS})`);
           emitir(userId, 'estado_conexion', { estado: 'reconectando', intento: sesion.intentosReconexion });
           setTimeout(() => conectar(userId), delay);
         } else if (statusCode === DisconnectReason.loggedOut) {
           logger.warn(`[Usuario ${userId}] Sesión cerrada. Limpiando archivos...`);
+          if (sesion.resolveReady) {
+            sesion.resolveReady(false);
+            sesion.resolveReady = null;
+          }
           limpiarSesion(userId);
           setTimeout(() => conectar(userId), 2000);
         } else {
           logger.error(`[Usuario ${userId}] No se puede reconectar. Intenta reescanear el QR.`);
+          if (sesion.resolveReady) {
+            sesion.resolveReady(false);
+            sesion.resolveReady = null;
+          }
           emitir(userId, 'estado_conexion', { estado: 'error', mensaje: 'No se puede reconectar' });
         }
       }
@@ -220,6 +236,10 @@ async function conectar(userId) {
   } catch (error) {
     logger.error(`[Usuario ${userId}] Error crítico al conectar:`, error);
     sesion.estadoConexion = 'error';
+    if (sesion.resolveReady) {
+      sesion.resolveReady(false);
+      sesion.resolveReady = null;
+    }
     emitir(userId, 'estado_conexion', { estado: 'error', mensaje: error.message });
     throw error;
   }
@@ -251,15 +271,15 @@ async function verificarConexion(userId) {
   const userSessionDir = path.join(BASE_SESSION_DIR, userId);
   const hasSessionFiles = fs.existsSync(path.join(userSessionDir, 'creds.json'));
 
-  // Si no hay socket y hay archivos, conectar
-  if (!sesion.socket && hasSessionFiles) {
-    logger.info(`[Usuario ${userId}] Detectada sesión en disco. Auto-conectando antes de enviar...`);
+  // Si no hay socket o está desconectado, pero hay archivos, intentar reconectar
+  if ((!sesion.socket || sesion.estadoConexion === 'desconectado' || sesion.estadoConexion === 'error') && hasSessionFiles) {
+    logger.info(`[Usuario ${userId}] Detectada sesión inactiva o desconectada. Auto-conectando antes de enviar...`);
     await conectar(userId);
   }
 
   // Si está conectando, esperar a que esté listo
-  if (sesion.estadoConexion === 'conectando' || sesion.estadoConexion === 'qr') {
-    logger.info(`[Usuario ${userId}] Esperando a que la conexión esté lista...`);
+  if (sesion.estadoConexion === 'conectando' || sesion.estadoConexion === 'qr' || sesion.estadoConexion === 'reconectando') {
+    logger.info(`[Usuario ${userId}] Esperando a que la conexión esté lista (Estado: ${sesion.estadoConexion})...`);
     if (sesion.readyPromise) {
       await sesion.readyPromise;
     }
