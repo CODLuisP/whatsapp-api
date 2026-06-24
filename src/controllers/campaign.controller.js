@@ -8,7 +8,8 @@ const queueService = require('../services/queue.service');
 async function listarCampañas(req, res) {
   try {
     const userId = req.user.id;
-    const campañas = await campaignDb.listarTodos(userId);
+    const tipo = req.query.tipo === 'individual' ? 'individual' : 'masivo';
+    const campañas = await campaignDb.listarTodos(userId, tipo);
     const campañasConEstado = campañas.map(c => ({
       ...c,
       procesando_ahora: queueService.estaActiva(c.id),
@@ -18,7 +19,7 @@ async function listarCampañas(req, res) {
     }));
     return res.json({
       exito: true,
-      datos: { total: campañas.length, campañas: campañasConEstado, colas_activas: queueService.obtenerCampañasActivas() },
+      datos: { tipo, total: campañas.length, campañas: campañasConEstado, colas_activas: queueService.obtenerCampañasActivas() },
     });
   } catch (error) {
     logger.error('Error al listar campañas:', error);

@@ -63,6 +63,8 @@ const Campaign = sequelize.define('Campaign', {
     defaultValue: 'pendiente',
     // valores: pendiente, en_proceso, completada, completada_con_errores, cancelada, error
   },
+  tipo:           { type: DataTypes.STRING, defaultValue: 'masivo' },
+  // valores tipo: individual | masivo
   total_mensajes: { type: DataTypes.INTEGER, defaultValue: 0 },
   enviados:       { type: DataTypes.INTEGER, defaultValue: 0 },
   fallidos:       { type: DataTypes.INTEGER, defaultValue: 0 },
@@ -119,7 +121,16 @@ Message.belongsTo(Campaign, { foreignKey: 'campaign_id' });
  * Inicializar la base de datos (crear tablas si no existen)
  */
 async function initDatabase() {
-  await sequelize.sync(); // alter: true daba problemas de SQLITE_BUSY
+  await sequelize.sync();
+
+  // Migración: agregar columna tipo si no existe (SQLite no soporta IF NOT EXISTS en ALTER)
+  await sequelize.query("ALTER TABLE campaigns ADD COLUMN tipo TEXT DEFAULT 'masivo'").catch(() => {});
+
+  // Migración: marcar registros históricos individuales (nombre empieza con "Individual - ")
+  await sequelize.query(
+    "UPDATE campaigns SET tipo = 'individual' WHERE tipo IS NULL OR (tipo = 'masivo' AND nombre LIKE 'Individual - %')"
+  ).catch(() => {});
+
   logger.info('✅ Base de datos inicializada correctamente');
 }
 
@@ -140,8 +151,8 @@ const campaignDb = {
 
   obtenerPorId: (id, user_id) => Campaign.findOne({ where: { id, user_id }, raw: true }),
 
-  listarTodos: (user_id) => Campaign.findAll({
-    where: { user_id },
+  listarTodos: (user_id, tipo = 'masivo') => Campaign.findAll({
+    where: { user_id, tipo },
     order: [['created_at', 'DESC']],
     raw: true,
   }),
@@ -173,6 +184,22 @@ const messageDb = {
     order: [['created_at', 'ASC']],
     raw: true,
   }),
+
+  listarTodos: (user_id, filtros = {}) => {
+    const where = { user_id };
+    if (filtros.estado) where.estado = filtros.estado;
+    if (filtros.tipo) where.tipo = filtros.tipo;
+    if (filtros.campaign_id) where.campaign_id = filtros.campaign_id;
+    const limit  = parseInt(filtros.limit)  || 50;
+    const offset = parseInt(filtros.page)   ? (parseInt(filtros.page) - 1) * limit : 0;
+    return Message.findAndCountAll({
+      where,
+      order: [['created_at', 'DESC']],
+      limit,
+      offset,
+      raw: true,
+    });
+  },
 };
 
 module.exports = { initDatabase, sequelize, User, Campaign, Message, userDb, campaignDb, messageDb };

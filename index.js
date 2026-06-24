@@ -13,7 +13,9 @@ const fs = require('fs');
 // Importar rutas
 const statusRoutes = require('./src/routes/status.routes');
 const messageRoutes = require('./src/routes/message.routes');
+const messagesListRoutes = require('./src/routes/messages-list.routes');
 const campaignRoutes = require('./src/routes/campaign.routes');
+const reportRoutes = require('./src/routes/report.routes');
 const userRoutes = require('./src/routes/user.routes');
 
 // Importar servicios y middlewares
@@ -21,6 +23,10 @@ const whatsappService = require('./src/services/whatsapp.service');
 const { initDatabase } = require('./src/utils/database');
 const logger = require('./src/utils/logger');
 const { verificarApiKey } = require('./src/middlewares/auth.middleware');
+
+// Swagger
+const swaggerUi = require('swagger-ui-express');
+const swaggerSpec = require('./src/utils/swagger');
 
 // ── Crear directorios necesarios ──────────────────────────────
 const dirs = [
@@ -71,13 +77,23 @@ app.use((req, res, next) => {
   next();
 });
 
+// ── Swagger UI ────────────────────────────────────────────────
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
+  customSiteTitle: 'WhatsApp Bulk API - Docs',
+  swaggerOptions: {
+    persistAuthorization: true,
+  },
+}));
+
 // ── Registrar rutas públicas ──────────────────────────────────
 app.use('/api/users', userRoutes);
 
 // ── Registrar rutas protegidas ────────────────────────────────
 app.use('/api', verificarApiKey, statusRoutes);
 app.use('/api', verificarApiKey, messageRoutes);
+app.use('/api', verificarApiKey, messagesListRoutes);
 app.use('/api', verificarApiKey, campaignRoutes);
+app.use('/api', verificarApiKey, reportRoutes);
 
 // Ruta raíz con info de la API
 app.get('/', (req, res) => {
