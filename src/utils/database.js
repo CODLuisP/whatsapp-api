@@ -107,6 +107,38 @@ const Message = sequelize.define('Message', {
   underscored: true,
 });
 
+// ── Modelo: Plantilla (Template) ────────────────────────────────
+const Template = sequelize.define('Template', {
+  id: {
+    type: DataTypes.STRING,
+    primaryKey: true,
+  },
+  user_id: {
+    type: DataTypes.STRING,
+    allowNull: false,
+    references: { model: User, key: 'id' },
+  },
+  name: {
+    type: DataTypes.STRING,
+    allowNull: false,
+  },
+  text: {
+    type: DataTypes.TEXT,
+    allowNull: false,
+  },
+  category: {
+    type: DataTypes.STRING,
+    defaultValue: 'marketing',
+  },
+  variables: {
+    type: DataTypes.TEXT,
+    allowNull: true,
+  },
+}, {
+  tableName: 'templates',
+  underscored: true,
+});
+
 // Relaciones
 User.hasMany(Campaign, { foreignKey: 'user_id' });
 Campaign.belongsTo(User, { foreignKey: 'user_id' });
@@ -116,6 +148,9 @@ Message.belongsTo(User, { foreignKey: 'user_id' });
 
 Campaign.hasMany(Message, { foreignKey: 'campaign_id' });
 Message.belongsTo(Campaign, { foreignKey: 'campaign_id' });
+
+User.hasMany(Template, { foreignKey: 'user_id' });
+Template.belongsTo(User, { foreignKey: 'user_id' });
 
 /**
  * Inicializar la base de datos (crear tablas si no existen)
@@ -202,4 +237,28 @@ const messageDb = {
   },
 };
 
-module.exports = { initDatabase, sequelize, User, Campaign, Message, userDb, campaignDb, messageDb };
+// ── Helpers para plantillas ───────────────────────────────────
+const templateDb = {
+  crear: (datos) => Template.create(datos),
+  actualizar: (id, user_id, datos) => Template.update(datos, { where: { id, user_id } }),
+  obtenerPorId: (id, user_id) => Template.findOne({ where: { id, user_id }, raw: true }),
+  listarTodos: (user_id) => Template.findAll({
+    where: { user_id },
+    order: [['created_at', 'DESC']],
+    raw: true,
+  }),
+  eliminarPorId: (id, user_id) => Template.destroy({ where: { id, user_id } }),
+};
+
+module.exports = {
+  initDatabase,
+  sequelize,
+  User,
+  Campaign,
+  Message,
+  Template,
+  userDb,
+  campaignDb,
+  messageDb,
+  templateDb
+};

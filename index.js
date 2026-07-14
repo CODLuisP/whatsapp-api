@@ -17,6 +17,7 @@ const messagesListRoutes = require('./src/routes/messages-list.routes');
 const campaignRoutes = require('./src/routes/campaign.routes');
 const reportRoutes = require('./src/routes/report.routes');
 const userRoutes = require('./src/routes/user.routes');
+const templateRoutes = require('./src/routes/template.routes');
 
 // Importar servicios y middlewares
 const whatsappService = require('./src/services/whatsapp.service');
@@ -49,6 +50,7 @@ const httpServer = createServer(app);
 
 // ── Configurar Socket.IO para progreso en tiempo real ────────
 const io = new Server(httpServer, {
+  path: '/whatsapp/socket.io',
   cors: {
     origin: '*', // En producción, limitar a tu dominio
     methods: ['GET', 'POST'],
@@ -94,6 +96,7 @@ app.use('/api', verificarApiKey, messageRoutes);
 app.use('/api', verificarApiKey, messagesListRoutes);
 app.use('/api', verificarApiKey, campaignRoutes);
 app.use('/api', verificarApiKey, reportRoutes);
+app.use('/api', verificarApiKey, templateRoutes);
 
 // Ruta raíz con info de la API
 app.get('/', (req, res) => {
